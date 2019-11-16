@@ -541,6 +541,24 @@ namespace Microsoft.Azure.Commands.Compute.Properties {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to -migrate parameter cannot be used when Azure Disk Encryption is disabled in the VM. For more information, see https://docs.microsoft.com/azure/security/azure-security-disk-encryption-linux. .
+        /// </summary>
+        internal static string EnableDiskEncryptionInvalidMigrateParameterForDisable {
+            get {
+                return ResourceManager.GetString("EnableDiskEncryptionInvalidMigrateParameterForDisable", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to -migrate parameter cannot be used with this version of Azure Disk Encryption. For more information, see https://docs.microsoft.com/azure/security/azure-security-disk-encryption-linux. .
+        /// </summary>
+        internal static string EnableDiskEncryptionInvalidMigrateParameterForSinglePass {
+            get {
+                return ResourceManager.GetString("EnableDiskEncryptionInvalidMigrateParameterForSinglePass", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to -skipVmBackup parameter is a required parameter for encrypting Linux VMs with managed disks. For more information, see https://docs.microsoft.com/azure/security/azure-security-disk-encryption-linux. .
         /// </summary>
         internal static string EnableDiskEncryptionMissingSkipVmBackup {

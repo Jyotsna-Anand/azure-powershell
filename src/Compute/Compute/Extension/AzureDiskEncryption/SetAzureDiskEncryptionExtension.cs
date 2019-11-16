@@ -25,6 +25,7 @@ using System;
 using System.Collections;
 using System.Globalization;
 using System.Management.Automation;
+using Newtonsoft.Json;
 
 namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
 {
@@ -202,6 +203,12 @@ namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
             Mandatory = false,
             HelpMessage = "Encrypt-Format all data drives that are not already encrypted")]
         public SwitchParameter EncryptFormatAll { get; set; }
+
+        [Parameter(
+            Mandatory = false,
+            ValueFromPipelineByPropertyName = true,
+            HelpMessage = "Migrate VM to newer version of ADE. Specify this parameter only to migrate from ADE with AAD credentials to ADE without AAD credentials.")]
+        public SwitchParameter Migrate { get; set; }
 
         private OperatingSystemTypes? currentOSType = null;
 
@@ -416,6 +423,102 @@ namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
             return updateResult;
         }
 
+        private AzureOperationResponse<VirtualMachine> UpdateVmEncryptionSettingsForMigration(DiskEncryptionSettings encryptionSettingsBackup)
+        {
+
+            string statusMessage = GetExtensionStatusMessage();
+
+            // stop VM
+            this.ComputeClient.ComputeManagementClient.VirtualMachines
+                    .DeallocateWithHttpMessagesAsync(this.ResourceGroupName, this.VMName).GetAwaiter()
+                    .GetResult();
+
+            var vmParameters = (this.ComputeClient.ComputeManagementClient.VirtualMachines.Get(
+                this.ResourceGroupName, this.VMName));
+
+            DiskEncryptionSettings resetEncryptionSettings = new DiskEncryptionSettings();
+            resetEncryptionSettings.Enabled = false;
+            vmParameters.StorageProfile.OsDisk.EncryptionSettings = resetEncryptionSettings;
+
+            // update VM
+            AzureOperationResponse<VirtualMachine> setEncryptionEnabledFalse = null;
+            setEncryptionEnabledFalse = this.ComputeClient.ComputeManagementClient.VirtualMachines.CreateOrUpdateWithHttpMessagesAsync(
+                    this.ResourceGroupName,
+                    vmParameters.Name,
+                    vmParameters).GetAwaiter().GetResult();
+
+            // start VM
+            this.ComputeClient.ComputeManagementClient.VirtualMachines
+                    .StartWithHttpMessagesAsync(ResourceGroupName, this.VMName).GetAwaiter().GetResult();
+
+            return setEncryptionEnabledFalse;
+            /*
+            System.Collections.Generic.IList<VirtualMachineExtension> VMresoures = vmParameters.Resources;
+            VirtualMachineExtension ade = new VirtualMachineExtension();
+            foreach (VirtualMachineExtension vmext in VMresoures) {
+
+                if (vmext.VirtualMachineExtensionType.Contains("AzureDiskEncryption"))
+                {
+                    this.WriteWarning("********Found ADE Extension ********");
+                    vmext.TypeHandlerVersion = "2.2";
+                    break;
+                }
+            }
+
+            VirtualMachine vmadeSinglePass = new VirtualMachine(location: vmParameters.Location, resources: VMresoures)
+            {
+                DiagnosticsProfile = vmParameters.DiagnosticsProfile,
+                HardwareProfile = vmParameters.HardwareProfile,
+                StorageProfile = vmParameters.StorageProfile,
+                NetworkProfile = vmParameters.NetworkProfile,
+                OsProfile = vmParameters.OsProfile,
+                Plan = vmParameters.Plan,
+                AvailabilitySet = vmParameters.AvailabilitySet,
+                Tags = vmParameters.Tags
+            };
+            this.WriteObject(vmadeSinglePass);
+            this.WriteWarning("********VM Object created ********");
+            this.WriteWarning(vmadeSinglePass.Resources[0].VirtualMachineExtensionType.ToString());
+            this.WriteWarning(vmadeSinglePass.Resources[0].TypeHandlerVersion.ToString());
+            AzureOperationResponse<VirtualMachine> updateResult = null;
+            updateResult = this.ComputeClient.ComputeManagementClient.VirtualMachines.CreateOrUpdateWithHttpMessagesAsync(
+                    this.ResourceGroupName,
+                    vmParameters.Name,
+                    vmadeSinglePass).GetAwaiter().GetResult();
+            this.ComputeClient.ComputeManagementClient.VirtualMachines
+                    .StartWithHttpMessagesAsync(ResourceGroupName, this.VMName).GetAwaiter().GetResult();
+            return updateResult;
+            */
+        }
+
+        private AzureOperationResponse<VirtualMachine> ClearVmEncryptionSettingsForMigration(DiskEncryptionSettings encryptionSettingsBackup)
+        {
+
+            string statusMessage = GetExtensionStatusMessage();
+
+            // stop VM
+            this.ComputeClient.ComputeManagementClient.VirtualMachines
+                    .DeallocateWithHttpMessagesAsync(this.ResourceGroupName, this.VMName).GetAwaiter()
+                    .GetResult();
+
+            var vmParameters = (this.ComputeClient.ComputeManagementClient.VirtualMachines.Get(
+                this.ResourceGroupName, this.VMName));
+            vmParameters.StorageProfile.OsDisk.EncryptionSettings = null;
+
+            // update VM
+            AzureOperationResponse<VirtualMachine> clearEncryptionSettings = null;
+            clearEncryptionSettings = this.ComputeClient.ComputeManagementClient.VirtualMachines.CreateOrUpdateWithHttpMessagesAsync(
+                    this.ResourceGroupName,
+                    vmParameters.Name,
+                    vmParameters).GetAwaiter().GetResult();
+
+            // start VM
+            this.ComputeClient.ComputeManagementClient.VirtualMachines
+                    .StartWithHttpMessagesAsync(ResourceGroupName, this.VMName).GetAwaiter().GetResult();
+
+            return clearEncryptionSettings;
+        }
+
         private Hashtable GetExtensionPublicSettings()
         {
             Hashtable publicSettings = new Hashtable();
@@ -428,7 +531,11 @@ namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
             publicSettings.Add(AzureDiskEncryptionExtensionConstants.volumeTypeKey, VolumeType ?? String.Empty);
             publicSettings.Add(AzureDiskEncryptionExtensionConstants.sequenceVersionKey, SequenceVersion ?? String.Empty);
 
-            if (EncryptFormatAll.IsPresent)
+            if (Migrate.IsPresent)
+            {
+                publicSettings.Add(AzureDiskEncryptionExtensionConstants.encryptionOperationKey, AzureDiskEncryptionExtensionConstants.migrateVersionOperation);
+            }
+            else if (EncryptFormatAll.IsPresent)
             {
                 publicSettings.Add(AzureDiskEncryptionExtensionConstants.encryptionOperationKey, AzureDiskEncryptionExtensionConstants.enableEncryptionFormatAllOperation);
             }
@@ -554,6 +661,16 @@ namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
             }
         }
 
+        private PSVirtualMachineExtension GetVMExtensionParametersForMigration()
+        {
+            // Get the public settings used for encrypting the VM from ADE extension properties.
+            AzureOperationResponse<VirtualMachineExtension> vmGetADEExtensionResponse = this.VirtualMachineExtensionClient.GetWithInstanceView(this.ResourceGroupName,
+                        this.VMName, "AzureDiskEncryption");
+            var vmADEExtension = vmGetADEExtensionResponse.ToPSVirtualMachineExtension(
+                this.ResourceGroupName, this.VMName);
+            return vmADEExtension;
+        }
+
         public override void ExecuteCmdlet()
         {
             base.ExecuteCmdlet();
@@ -564,6 +681,8 @@ namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
                 && (this.Force.IsPresent ||
                 this.ShouldContinue(Properties.Resources.EnableAzureDiskEncryptionConfirmation, Properties.Resources.EnableAzureDiskEncryptionCaption)))
                 {
+                    this.WriteWarning("********THIS IS GENERATED FROM A LOCAL PS BUILD. ********");
+
                     VirtualMachine virtualMachineResponse = this.ComputeClient.ComputeManagementClient.VirtualMachines.GetWithInstanceView(
                         this.ResourceGroupName, VMName).Body;
 
@@ -584,7 +703,7 @@ namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
                         else
                         {
                             CreateVMBackupForLinx();
-                        }                        
+                        }
                     }
 
                     VirtualMachineExtension parameters = GetVmExtensionParameters(virtualMachineResponse);
@@ -592,52 +711,166 @@ namespace Microsoft.Azure.Commands.Compute.Extension.AzureDiskEncryption
                     DiskEncryptionSettings encryptionSettingsBackup = virtualMachineResponse.StorageProfile.OsDisk.EncryptionSettings ??
                                                                       new DiskEncryptionSettings { Enabled = false };
 
-                    // Single Pass
-                    //      newer model, supported by newer extension versions and host functionality
-                    //      if SinglePassParameterSet is used, cmdlet will default to newer extension version
-                    //      [first and only pass]
-                    //          only one enable extension call will be issued from the cmdlet n
-                    //          No AD identity information or protected settings will be passed to the extension
-                    //          Host performs the necessary key vault operations and vm model updates
-                    // Dual Pass
-                    //      older model, supported by older extension versions
-                    //      if an AD ParameterSet is used, cmdlet will default to older extension version
-                    //      [first pass]
-                    //          AD identity information is passed into the VM via protected settings of the extension
-                    //          VM uses the AD identity to authenticate and perform key vault operations
-                    //          VM returns result of key vault operation to caller via the extension status message
-                    //      [second pass]
-                    //          powershell reads extension status message returned from first pass
-                    //          updates VM model with encryption settings
-                    //          updates VM
+                    if (this.Migrate.IsPresent)
+                    {
+                        // ADE migration scenario from 2 pass to 1 pass
+                        if (virtualMachineResponse.StorageProfile.OsDisk.EncryptionSettings == null)
+                        {
+                            // -migrate is an invalid parameter for VMs using single pass ADE.
+                            ThrowTerminatingError(new ErrorRecord(new ArgumentException(string.Format(CultureInfo.CurrentUICulture, Resources.EnableDiskEncryptionInvalidMigrateParameterForSinglePass)),
+                                                          "InvalidArgument",
+                                                          ErrorCategory.InvalidArgument,
+                                                          null));
 
-                    // First Pass
-                    AzureOperationResponse<VirtualMachineExtension> firstPass = this.VirtualMachineExtensionClient.CreateOrUpdateWithHttpMessagesAsync(
+                        }
+                        else if ((virtualMachineResponse.StorageProfile.OsDisk.EncryptionSettings.Enabled == null) ||
+                            (virtualMachineResponse.StorageProfile.OsDisk.EncryptionSettings.Enabled == false))
+                        {
+                            // -migrate is an invalid parameter for VMs in which 2 pass ADE has been disabled.
+                            ThrowTerminatingError(new ErrorRecord(new ArgumentException(string.Format(CultureInfo.CurrentUICulture, Resources.EnableDiskEncryptionInvalidMigrateParameterForDisable)),
+                                                          "InvalidArgument",
+                                                          ErrorCategory.InvalidArgument,
+                                                          null));
+                        }
+
+                        // Get 2 pass public settings that were used to encrypt the VM
+                        // This needs to be fetched from 'ExtensionProperties' since user specifies only the 'Migrate' flag in migration scenarios
+                        var adeExtensionProperties = GetVMExtensionParametersForMigration();
+                        Hashtable vmPublicSettings = JsonConvert.DeserializeObject<Hashtable>(adeExtensionProperties.PublicSettings);
+                        vmPublicSettings.Remove(AzureDiskEncryptionExtensionConstants.encryptionOperationKey);
+                        vmPublicSettings.Add(AzureDiskEncryptionExtensionConstants.encryptionOperationKey, AzureDiskEncryptionExtensionConstants.migrateVersionOperation);
+                        this.WriteWarning(vmPublicSettings.Values.ToString());
+                        VirtualMachineExtension vmExtensionParameters = new VirtualMachineExtension
+                        {
+                            Location = adeExtensionProperties.Location,
+                            Publisher = adeExtensionProperties.Publisher,
+                            VirtualMachineExtensionType = adeExtensionProperties.ExtensionType,
+                            TypeHandlerVersion = adeExtensionProperties.TypeHandlerVersion,
+                            Settings = vmPublicSettings,
+                            ProtectedSettings = adeExtensionProperties.ProtectedSettings,
+                            AutoUpgradeMinorVersion = adeExtensionProperties.AutoUpgradeMinorVersion,
+                        };
+                        // Upload encryption settings to host using 2 pass extension for migration
+                        AzureOperationResponse<VirtualMachineExtension> configureVMforMigrate= this.VirtualMachineExtensionClient.CreateOrUpdateWithHttpMessagesAsync(
                         this.ResourceGroupName,
                         this.VMName,
                         this.Name,
-                        parameters).GetAwaiter().GetResult();
+                        vmExtensionParameters).GetAwaiter().GetResult();
+                        if (!configureVMforMigrate.Response.IsSuccessStatusCode)
+                        {
+                            ThrowTerminatingError(new ErrorRecord(new ApplicationException(string.Format(CultureInfo.CurrentUICulture,
+                                                                                            "Migration failed while uploading encryption settings to host: {0} with error {1}",
+                                                                                            parameters.VirtualMachineExtensionType,
+                                                                                            configureVMforMigrate.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult())),
+                                                                    "InvalidResult",
+                                                                    ErrorCategory.InvalidResult,
+                                                                    null));
+                        }
 
-                    if (!firstPass.Response.IsSuccessStatusCode)
-                    {
-                        ThrowTerminatingError(new ErrorRecord(new ApplicationException(string.Format(CultureInfo.CurrentUICulture,
-                                                                                        "Installation failed for extension {0} with error {1}",
+                        // Update EncryptionSettings.Enabled to False
+                        var setEncryptionEnabledFalse = UpdateVmEncryptionSettingsForMigration(encryptionSettingsBackup);
+                        if (!setEncryptionEnabledFalse.Response.IsSuccessStatusCode)
+                        {
+                            ThrowTerminatingError(new ErrorRecord(new ApplicationException(string.Format(CultureInfo.CurrentUICulture, "Migration failed while updating encryption settings")),
+                                                                    "InvalidResult",
+                                                                    ErrorCategory.InvalidResult,
+                                                                    null));
+                        }
+
+                        // Install single pass extension
+                        string typeHandlerVersionForMigration;
+                        if (OperatingSystemTypes.Linux.Equals(currentOSType))
+                        {
+                            typeHandlerVersionForMigration = AzureDiskEncryptionExtensionContext.LinuxExtensionSinglePassVersion;
+                        }
+                        else
+                        {
+                            typeHandlerVersionForMigration = AzureDiskEncryptionExtensionContext.ExtensionSinglePassVersion;
+                        }
+
+                        // Encryption operation is set to 'MigrateOperation' here. This needs to be changed later
+                        vmPublicSettings.Remove(AzureDiskEncryptionExtensionConstants.aadClientIDKey);
+                        vmPublicSettings.Remove(AzureDiskEncryptionExtensionConstants.aadClientCertThumbprintKey);
+                        VirtualMachineExtension vmSinglePassExtensionParameters = new VirtualMachineExtension
+                        {
+                            Location = adeExtensionProperties.Location,
+                            Publisher = adeExtensionProperties.Publisher,
+                            VirtualMachineExtensionType = adeExtensionProperties.ExtensionType,
+                            TypeHandlerVersion = typeHandlerVersionForMigration,
+                            Settings = vmPublicSettings,
+                            AutoUpgradeMinorVersion = adeExtensionProperties.AutoUpgradeMinorVersion,
+                        };
+
+                        AzureOperationResponse<VirtualMachineExtension> UpdateToSinglePass = this.VirtualMachineExtensionClient.CreateOrUpdateWithHttpMessagesAsync(
+                                this.ResourceGroupName,
+                                this.VMName,
+                                this.Name,
+                                vmSinglePassExtensionParameters).GetAwaiter().GetResult();
+
+                        if (!UpdateToSinglePass.Response.IsSuccessStatusCode)
+                        {
+                            ThrowTerminatingError(new ErrorRecord(new ApplicationException(string.Format(CultureInfo.CurrentUICulture,
+                                                                                        "Migration failed while installing single pass extension {0} with error {1}",
                                                                                         parameters.VirtualMachineExtensionType,
-                                                                                        firstPass.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult())),
+                                                                                        configureVMforMigrate.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult())),
                                                                 "InvalidResult",
                                                                 ErrorCategory.InvalidResult,
                                                                 null));
-                    }
+                        }
 
-                    if (this.ParameterSetName.Equals(AzureDiskEncryptionExtensionConstants.singlePassParameterSet))
-                    {
-                        WriteObject(ComputeAutoMapperProfile.Mapper.Map<PSAzureOperationResponse>(firstPass));
+                        //3. after success, clear encryption settings from VM model
+                        ClearVmEncryptionSettingsForMigration(encryptionSettingsBackup);
+                        WriteObject(ComputeAutoMapperProfile.Mapper.Map<PSAzureOperationResponse>(UpdateToSinglePass));
                     }
                     else
                     {
-                        // Second pass
-                        var secondPass = UpdateVmEncryptionSettings(encryptionSettingsBackup);
-                        WriteObject(ComputeAutoMapperProfile.Mapper.Map<PSAzureOperationResponse>(secondPass));
+                        // Single Pass
+                        //      newer model, supported by newer extension versions and host functionality
+                        //      if SinglePassParameterSet is used, cmdlet will default to newer extension version
+                        //      [first and only pass]
+                        //          only one enable extension call will be issued from the cmdlet n
+                        //          No AD identity information or protected settings will be passed to the extension
+                        //          Host performs the necessary key vault operations and vm model updates
+                        // Dual Pass
+                        //      older model, supported by older extension versions
+                        //      if an AD ParameterSet is used, cmdlet will default to older extension version
+                        //      [first pass]
+                        //          AD identity information is passed into the VM via protected settings of the extension
+                        //          VM uses the AD identity to authenticate and perform key vault operations
+                        //          VM returns result of key vault operation to caller via the extension status message
+                        //      [second pass]
+                        //          powershell reads extension status message returned from first pass
+                        //          updates VM model with encryption settings
+                        //          updates VM
+
+                        // First Pass
+                        AzureOperationResponse<VirtualMachineExtension> firstPass = this.VirtualMachineExtensionClient.CreateOrUpdateWithHttpMessagesAsync(
+                            this.ResourceGroupName,
+                            this.VMName,
+                            this.Name,
+                            parameters).GetAwaiter().GetResult();
+
+                        if (!firstPass.Response.IsSuccessStatusCode)
+                        {
+                            ThrowTerminatingError(new ErrorRecord(new ApplicationException(string.Format(CultureInfo.CurrentUICulture,
+                                                                                            "Installation failed for extension {0} with error {1}",
+                                                                                            parameters.VirtualMachineExtensionType,
+                                                                                            firstPass.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult())),
+                                                                    "InvalidResult",
+                                                                    ErrorCategory.InvalidResult,
+                                                                    null));
+                        }
+
+                        if (this.ParameterSetName.Equals(AzureDiskEncryptionExtensionConstants.singlePassParameterSet))
+                        {
+                            WriteObject(ComputeAutoMapperProfile.Mapper.Map<PSAzureOperationResponse>(firstPass));
+                        }
+                        else
+                        {
+                            // Second pass
+                            var secondPass = UpdateVmEncryptionSettings(encryptionSettingsBackup);
+                            WriteObject(ComputeAutoMapperProfile.Mapper.Map<PSAzureOperationResponse>(secondPass));
+                        }
                     }
                 }
             });

@@ -606,4 +606,10 @@ The file needs to be a PowerShell script (.ps1 or .psm1) or a ZIP archive (.zip)
   <data name="WindowsConfigurationSpecified" xml:space="preserve">
     <value>Windows configuration is already specified.  This cmdlet requires a Linux configuration.</value>
   </data>
+  <data name="EnableDiskEncryptionInvalidMigrateParameterForDisable" xml:space="preserve">
+    <value>-migrate parameter cannot be used when Azure Disk Encryption is disabled in the VM. For more information, see https://docs.microsoft.com/azure/security/azure-security-disk-encryption-linux. </value>
+  </data>
+  <data name="EnableDiskEncryptionInvalidMigrateParameterForSinglePass" xml:space="preserve">
+    <value>-migrate parameter cannot be used with this version of Azure Disk Encryption. For more information, see https://docs.microsoft.com/azure/security/azure-security-disk-encryption-linux. </value>
+  </data>
 </root>
